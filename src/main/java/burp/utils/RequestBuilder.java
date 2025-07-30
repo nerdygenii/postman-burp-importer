@@ -22,13 +22,16 @@ public class RequestBuilder {
     public byte[] buildRequest(PostmanCollection.Request request) throws Exception {
         List<String> headers = new ArrayList<>();
         
+        // Resolve URL once to ensure consistency between host and path parsing
+        String resolvedUrl = getResolvedUrl(request.url);
+        
         // Build request line
         String method = request.method != null ? request.method : "GET";
-        String path = buildPath(request.url);
+        String path = buildPath(request.url, resolvedUrl);
         headers.add(method + " " + path + " HTTP/1.1");
         
         // Add host header
-        String host = buildHost(request.url);
+        String host = buildHost(request.url, resolvedUrl);
         headers.add("Host: " + host);
         if (debugMode) {
             System.out.println("DEBUG: Auto-generated Host header: " + host);
@@ -69,10 +72,32 @@ public class RequestBuilder {
         return helpers.buildHttpMessage(headers, body);
     }
     
-    private String buildPath(Object urlData) throws UnsupportedEncodingException {
-        if (urlData == null) return "/";
+    private String getResolvedUrl(Object urlData) {
+        if (urlData == null) return null;
         
         // Handle string URL format
+        if (urlData instanceof String) {
+            return resolver.resolve((String) urlData);
+        }
+        
+        // Handle Url object format - extract raw URL and resolve it
+        PostmanCollection.Url url = parseUrlObject(urlData);
+        if (url != null && url.raw != null) {
+            return resolver.resolve(url.raw);
+        }
+        
+        return null;
+    }
+    
+    private String buildPath(Object urlData, String resolvedUrl) throws UnsupportedEncodingException {
+        if (urlData == null) return "/";
+        
+        // If we have a resolved URL, use it directly for path extraction
+        if (resolvedUrl != null) {
+            return extractPathFromUrl(resolvedUrl);
+        }
+        
+        // Handle string URL format (fallback)
         if (urlData instanceof String) {
             String urlString = resolver.resolve((String) urlData);
             return extractPathFromUrl(urlString);
@@ -147,10 +172,16 @@ public class RequestBuilder {
         }
     }
     
-    private String buildHost(Object urlData) {
+    private String buildHost(Object urlData, String resolvedUrl) {
         if (urlData == null) return "localhost";
         
-        // Handle string URL format
+        // If we have a resolved URL, use it directly for host extraction
+        if (resolvedUrl != null) {
+            HttpUtils.HostInfo hostInfo = HttpUtils.parseUrl(resolvedUrl);
+            return buildHostWithPort(hostInfo.host, hostInfo.port, hostInfo.useHttps);
+        }
+        
+        // Handle string URL format (fallback)
         if (urlData instanceof String) {
             String urlString = resolver.resolve((String) urlData);
             HttpUtils.HostInfo hostInfo = HttpUtils.parseUrl(urlString);

@@ -1,8 +1,9 @@
 package burp.utils;
 
-import burp.*;
 import burp.models.*;
 import burp.parser.*;
+import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.http.message.requests.HttpRequest;
 import com.google.gson.*;
 import java.util.*;
 import java.net.URLEncoder;
@@ -10,12 +11,12 @@ import java.nio.charset.StandardCharsets;
 import java.io.UnsupportedEncodingException;
 
 public class RequestBuilder {
-    private final IExtensionHelpers helpers;
+    private final MontoyaApi api;
     private final VariableResolver resolver;
     private final boolean debugMode = false; // Set to true to enable debug logging
     
-    public RequestBuilder(IExtensionHelpers helpers, VariableResolver resolver) {
-        this.helpers = helpers;
+    public RequestBuilder(MontoyaApi api, VariableResolver resolver) {
+        this.api = api;
         this.resolver = resolver;
     }
     
@@ -69,7 +70,9 @@ public class RequestBuilder {
         // Build body
         byte[] body = buildBody(request.body, headers);
         
-        return helpers.buildHttpMessage(headers, body);
+        // Build HTTP message using Montoya API
+        String httpMessage = String.join("\r\n", headers) + "\r\n\r\n" + new String(body, StandardCharsets.UTF_8);
+        return httpMessage.getBytes(StandardCharsets.UTF_8);
     }
     
     private String getResolvedUrl(Object urlData) {

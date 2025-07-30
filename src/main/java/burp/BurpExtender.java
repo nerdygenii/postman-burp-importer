@@ -23,46 +23,36 @@
 
 package burp;
 
+import burp.api.montoya.BurpExtension;
+import burp.api.montoya.MontoyaApi;
 import javax.swing.*;
-import java.awt.Component;  // Added missing import
+import java.awt.Component;
 
-public class BurpExtender implements IBurpExtender, ITab {
-    private IBurpExtenderCallbacks callbacks;
-    private IExtensionHelpers helpers;
+public class BurpExtender implements BurpExtension {
+    private MontoyaApi api;
     private PostmanImporter importer;
     private JPanel mainPanel;
     
     @Override
-    public void registerExtenderCallbacks(IBurpExtenderCallbacks callbacks) {
-        this.callbacks = callbacks;
-        this.helpers = callbacks.getHelpers();
+    public void initialize(MontoyaApi api) {
+        this.api = api;
         
-        callbacks.setExtensionName("Postman Collection Importer");
+        api.extension().setName("Postman Collection Importer");
         
         // Print extension info and author details
-        callbacks.printOutput("=================================================");
-        callbacks.printOutput("Postman Collection Importer v1.0.0");
-        callbacks.printOutput("Author: Abdulrahman Oyekunle");
-        callbacks.printOutput("GitHub: https://github.com/nerdygenii/postman-burp-importer");
-        callbacks.printOutput("=================================================");
-        callbacks.printOutput("Extension loaded successfully!");
-        callbacks.printOutput("Features: Variable resolution, GraphQL support, Smart retry, Multiple destination(sends to repeater or sitemap or both)");
-        callbacks.printOutput("");
+        api.logging().logToOutput("=================================================");
+        api.logging().logToOutput("Postman Collection Importer v1.0.1");
+        api.logging().logToOutput("Author: Abdulrahman Oyekunle");
+        api.logging().logToOutput("GitHub: https://github.com/nerdygenii/postman-burp-importer");
+        api.logging().logToOutput("=================================================");
+        api.logging().logToOutput("Extension loaded successfully!");
+        api.logging().logToOutput("Features: Variable resolution, GraphQL support, Smart retry, Multiple destination(sends to repeater or sitemap or both)");
+        api.logging().logToOutput("");
         
         SwingUtilities.invokeLater(() -> {
-            importer = new PostmanImporter(callbacks, helpers);
+            importer = new PostmanImporter(api);
             mainPanel = importer.getMainPanel();
-            callbacks.addSuiteTab(this);
+            api.userInterface().registerSuiteTab("Postman Importer", mainPanel);
         });
-    }
-    
-    @Override
-    public String getTabCaption() {
-        return "Postman Importer";
-    }
-    
-    @Override
-    public Component getUiComponent() {
-        return mainPanel;
     }
 }

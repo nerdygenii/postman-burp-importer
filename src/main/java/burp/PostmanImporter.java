@@ -15,6 +15,7 @@ import burp.models.*;
 import burp.parser.*;
 import burp.ui.*;
 import burp.utils.*;
+import burp.api.montoya.MontoyaApi;
 import com.google.gson.*;
 import javax.swing.*;
 import java.io.File;
@@ -22,8 +23,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class PostmanImporter {
-    private final IBurpExtenderCallbacks callbacks;
-    private final IExtensionHelpers helpers;
+    private final MontoyaApi api;
     private final ImporterPanel ui;
     private final PostmanParser parser;
     private final VariableResolver variableResolver;
@@ -33,12 +33,11 @@ public class PostmanImporter {
     private final boolean debugMode = true; // Set to false to reduce logging
     private ImportResult lastImportResult; // Store last import result for retry functionality
     
-    public PostmanImporter(IBurpExtenderCallbacks callbacks, IExtensionHelpers helpers) {
-        this.callbacks = callbacks;
-        this.helpers = helpers;
+    public PostmanImporter(MontoyaApi api) {
+        this.api = api;
         this.parser = new PostmanParser();
         this.variableResolver = new VariableResolver();
-        this.requestBuilder = new RequestBuilder(helpers, variableResolver);
+        this.requestBuilder = new RequestBuilder(api, variableResolver);
         this.variableDetector = new VariableDetector(variableResolver); // Initialize variable detector
         this.ui = new ImporterPanel(this);
     }
@@ -787,18 +786,25 @@ public class PostmanImporter {
     }
     
     private void sendToRepeater(HttpUtils.HostInfo hostInfo, byte[] request, String tabName) {
-        callbacks.sendToRepeater(
+        // Create HTTP service
+        burp.api.montoya.http.HttpService httpService = burp.api.montoya.http.HttpService.httpService(
             hostInfo.host,
             hostInfo.port,
-            hostInfo.useHttps,
-            request,
-            tabName
+            hostInfo.useHttps
         );
+        
+        // Create HTTP request from raw bytes
+        burp.api.montoya.http.message.requests.HttpRequest httpRequest = 
+            burp.api.montoya.http.message.requests.HttpRequest.httpRequest(httpService, 
+                burp.api.montoya.core.ByteArray.byteArray(request));
+        
+        // Send to repeater with tab name
+        api.repeater().sendToRepeater(httpRequest, tabName);
     }
     
     private void sendToSitemap(HttpUtils.HostInfo hostInfo, byte[] request, String requestName) throws Exception {
         // Create HTTP service
-        IHttpService httpService = helpers.buildHttpService(
+        burp.api.montoya.http.HttpService httpService = burp.api.montoya.http.HttpService.httpService(
             hostInfo.host,
             hostInfo.port,
             hostInfo.useHttps
@@ -806,41 +812,42 @@ public class PostmanImporter {
         
         // Debug logging
         if (debugMode) {
-            callbacks.printOutput("DEBUG: Creating sitemap request for " + requestName);
-            callbacks.printOutput("DEBUG: Host: " + hostInfo.host + ", Port: " + hostInfo.port + ", HTTPS: " + hostInfo.useHttps);
+            api.logging().logToOutput("DEBUG: Creating sitemap request for " + requestName);
+            api.logging().logToOutput("DEBUG: Host: " + hostInfo.host + ", Port: " + hostInfo.port + ", HTTPS: " + hostInfo.useHttps);
         }
         
         try {
             // Make actual HTTP request to populate sitemap
             if (debugMode) {
-                callbacks.printOutput("DEBUG: Making HTTP request to " + hostInfo.host);
+                api.logging().logToOutput("DEBUG: Making HTTP request to " + hostInfo.host);
             }
-            IHttpRequestResponse response = callbacks.makeHttpRequest(httpService, request);
+            burp.api.montoya.http.message.requests.HttpRequest httpRequest = 
+                burp.api.montoya.http.message.requests.HttpRequest.httpRequest(httpService, 
+                    burp.api.montoya.core.ByteArray.byteArray(request));
+            burp.api.montoya.http.message.HttpRequestResponse response = api.http().sendRequest(httpRequest);
             
             if (response != null) {
                 if (debugMode) {
-                    callbacks.printOutput("DEBUG: Received response for " + requestName);
+                    api.logging().logToOutput("DEBUG: Received response for " + requestName);
                 }
                 
-                if (response.getResponse() != null) {
-                    IResponseInfo responseInfo = helpers.analyzeResponse(response.getResponse());
-                    short statusCode = responseInfo.getStatusCode();
-                    callbacks.printOutput("Sitemap: " + requestName + " -> HTTP " + statusCode);
+                if (response.response() != null) {
+                    // Add to sitemap through HTTP history
+                    api.siteMap().add(response);
+                    short statusCode = response.response().statusCode();
+                    api.logging().logToOutput("Sitemap: " + requestName + " -> HTTP " + statusCode);
                     
-                    // Explicitly add to sitemap - this ensures it shows up in the sitemap
-                    callbacks.addToSiteMap(response);
                     if (debugMode) {
-                        callbacks.printOutput("DEBUG: Added " + requestName + " to sitemap explicitly");
+                        api.logging().logToOutput("DEBUG: Added " + requestName + " to sitemap");
                         // Also log the URL for verification
-                        IRequestInfo requestInfo = helpers.analyzeRequest(response);
-                        String url = requestInfo.getUrl().toString();
-                        callbacks.printOutput("DEBUG: Sitemap URL: " + url);
+                        String url = response.request().url();
+                        api.logging().logToOutput("DEBUG: Sitemap URL: " + url);
                     }
                 } else {
-                    callbacks.printOutput("DEBUG: Response was null for " + requestName);
+                    api.logging().logToOutput("DEBUG: Response was null for " + requestName);
                 }
             } else {
-                callbacks.printOutput("DEBUG: No response received for " + requestName);
+                api.logging().logToOutput("DEBUG: No response received for " + requestName);
             }
             
             // Add configurable delay to be respectful to the target server
@@ -861,14 +868,14 @@ public class PostmanImporter {
                 } else {
                     errorMsg = "Hostname not accessible - check network connectivity or VPN connection";
                 }
-                callbacks.printError("Sitemap connectivity issue for " + requestName + ": " + errorMsg);
+                api.logging().logToError("Sitemap connectivity issue for " + requestName + ": " + errorMsg);
             } else if (e.getCause() instanceof java.net.ConnectException || 
                        e.getMessage().contains("ConnectException")) {
                 errorMsg = "Connection refused or timeout - service may be down or firewalled";
-                callbacks.printError("Sitemap connection failed for " + requestName + ": " + errorMsg);
+                api.logging().logToError("Sitemap connection failed for " + requestName + ": " + errorMsg);
             } else {
                 errorMsg = "Request failed: " + extractCleanErrorMessage(e);
-                callbacks.printError("Failed to send " + requestName + " to sitemap: " + errorMsg);
+                api.logging().logToError("Failed to send " + requestName + " to sitemap: " + errorMsg);
             }
             throw new Exception(errorMsg);
         }

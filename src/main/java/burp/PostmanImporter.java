@@ -300,6 +300,11 @@ public class PostmanImporter {
     private void generatePreviewsRecursive(List<PostmanCollection.Item> items, String path, 
                                          List<RequestPreview> previews, VariableResolver resolver, 
                                          VariableDetector detector) {
+        // Add null check to prevent NullPointerException
+        if (items == null) {
+            return;
+        }
+        
         for (PostmanCollection.Item item : items) {
             String currentPath = path.isEmpty() ? item.name : path + "/" + item.name;
             
@@ -723,6 +728,11 @@ public class PostmanImporter {
     
     private List<RequestItem> flattenRequests(List<PostmanCollection.Item> items, String path) {
         List<RequestItem> requests = new ArrayList<>();
+        
+        // Add null check to prevent NullPointerException
+        if (items == null) {
+            return requests;
+        }
         
         for (PostmanCollection.Item item : items) {
             String currentPath = path.isEmpty() ? item.name : path + "/" + item.name;

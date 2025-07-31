@@ -58,6 +58,12 @@ public class PostmanCollection {
         public List<UrlEncoded> urlencoded;
         public Options options;
         public File file;  // Added for file uploads
+        public GraphQL graphql;  // Added for GraphQL support
+    }
+    
+    public static class GraphQL {
+        public String query;
+        public String variables;
     }
     
     public static class File {

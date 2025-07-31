@@ -66,13 +66,36 @@ public class VariableDetector {
         }
         
         // Check body
-        if (request.body != null && request.body.raw != null) {
-            variables.addAll(extractVariables(request.body.raw));
+        if (request.body != null) {
+            if (request.body.raw != null) {
+                variables.addAll(extractVariables(request.body.raw));
+            }
+            
+            // Check GraphQL body mode
+            if ("graphql".equals(request.body.mode) && request.body.graphql != null) {
+                variables.addAll(findVariablesInGraphQL(request.body.graphql));
+            }
         }
         
         // Check auth
         if (request.auth != null) {
             variables.addAll(findVariablesInAuth(request.auth));
+        }
+        
+        return variables;
+    }
+    
+    public Set<String> findVariablesInGraphQL(PostmanCollection.GraphQL graphql) {
+        Set<String> variables = new HashSet<>();
+        
+        // Check GraphQL query for variables
+        if (graphql.query != null) {
+            variables.addAll(extractVariables(graphql.query));
+        }
+        
+        // Check GraphQL variables JSON for Postman variables
+        if (graphql.variables != null) {
+            variables.addAll(extractVariables(graphql.variables));
         }
         
         return variables;

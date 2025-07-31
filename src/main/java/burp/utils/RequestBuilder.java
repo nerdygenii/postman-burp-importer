@@ -306,6 +306,12 @@ public class RequestBuilder {
                 }
                 break;
                 
+            case "graphql":
+                if (body.graphql != null) {
+                    return buildGraphQLBody(body.graphql, headers);
+                }
+                break;
+                
             case "urlencoded":
                 if (body.urlencoded != null) {
                     List<String> params = new ArrayList<>();
@@ -336,6 +342,62 @@ public class RequestBuilder {
         }
         
         return new byte[0];
+    }
+    
+    private byte[] buildGraphQLBody(PostmanCollection.GraphQL graphql, List<String> headers) {
+        if (graphql == null) return new byte[0];
+        
+        try {
+            Gson gson = new Gson();
+            JsonObject body = new JsonObject();
+            
+            // Add query (resolve variables in the query string)
+            // Supports all GraphQL operations: query, mutation, subscription
+            if (graphql.query != null) {
+                String resolvedQuery = resolver.resolve(graphql.query);
+                body.addProperty("query", resolvedQuery);
+            }
+            
+            // Add variables (resolve Postman variables in the variables JSON)
+            if (graphql.variables != null && !graphql.variables.trim().isEmpty()) {
+                try {
+                    // First resolve any Postman variables in the variables string
+                    String resolvedVariables = resolver.resolve(graphql.variables);
+                    
+                    // Then parse as JSON
+                    JsonElement variablesElement = gson.fromJson(resolvedVariables, JsonElement.class);
+                    body.add("variables", variablesElement);
+                } catch (Exception e) {
+                    // If variables parsing fails, try to resolve individual variables
+                    try {
+                        // Extract variables from the string and create a proper JSON object
+                        String cleanVariables = resolver.resolve(graphql.variables);
+                        if (cleanVariables.trim().startsWith("{") && cleanVariables.trim().endsWith("}")) {
+                            JsonElement parsedVariables = gson.fromJson(cleanVariables, JsonElement.class);
+                            body.add("variables", parsedVariables);
+                        } else {
+                            body.add("variables", new JsonObject());
+                        }
+                    } catch (Exception ex) {
+                        // Final fallback to empty object
+                        body.add("variables", new JsonObject());
+                    }
+                }
+            } else {
+                body.add("variables", new JsonObject());
+            }
+            
+            // Set Content-Type header if not already present
+            if (!hasContentType(headers)) {
+                headers.add("Content-Type: application/json");
+            }
+            
+            return gson.toJson(body).getBytes(StandardCharsets.UTF_8);
+            
+        } catch (Exception e) {
+            // Fallback to empty body if GraphQL processing fails
+            return new byte[0];
+        }
     }
     
     private byte[] buildMultipartBody(List<PostmanCollection.FormData> formData, String boundary) {

@@ -186,7 +186,7 @@ public class RequestBuilder {
         
         // Handle string URL format (fallback)
         if (urlData instanceof String) {
-            String urlString = resolver.resolve((String) urlData);
+            String urlString = (String) urlData; // Use original unresolved URL
             HttpUtils.HostInfo hostInfo = HttpUtils.parseUrl(urlString);
             return buildHostWithPort(hostInfo.host, hostInfo.port, hostInfo.useHttps);
         }
@@ -200,10 +200,10 @@ public class RequestBuilder {
             if (url.port != null && !url.port.isEmpty()) {
                 host += ":" + url.port;
             }
-            return resolver.resolve(host);
+            return host; // Don't resolve variables here - preserve them as-is
         } else if (url.raw != null) {
-            String resolved = resolver.resolve(url.raw);
-            HttpUtils.HostInfo hostInfo = HttpUtils.parseUrl(resolved);
+            String originalUrl = url.raw; // Use original unresolved URL
+            HttpUtils.HostInfo hostInfo = HttpUtils.parseUrl(originalUrl);
             return buildHostWithPort(hostInfo.host, hostInfo.port, hostInfo.useHttps);
         }
         return "localhost";

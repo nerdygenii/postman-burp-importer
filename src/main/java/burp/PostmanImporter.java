@@ -46,6 +46,13 @@ public class PostmanImporter {
         return ui.getPanel();
     }
     
+    public void clearEnvironmentVariables() {
+        variableResolver.clearAllVariables();
+        if (debugMode) {
+            api.logging().logToOutput("Environment variables cleared");
+        }
+    }
+    
     public void retryFailedRequests(String destination) {
         if (lastImportResult == null || lastImportResult.failedRequestDetails.isEmpty()) {
             ui.appendLog("No failed requests to retry.");

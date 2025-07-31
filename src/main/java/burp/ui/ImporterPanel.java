@@ -93,6 +93,11 @@ public class ImporterPanel {
         browseEnvBtn.addActionListener(e -> selectEnvironmentFile());
         filePanel.add(browseEnvBtn, gbc);
         
+        gbc.gridx = 3; gbc.weightx = 0;
+        JButton clearVarsBtn = new JButton("Clear Variables");
+        clearVarsBtn.addActionListener(e -> clearEnvironmentVariables());
+        filePanel.add(clearVarsBtn, gbc);
+        
         // Destination selection
         gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 3;
         filePanel.add(Box.createVerticalStrut(10), gbc);
@@ -348,6 +353,28 @@ public class ImporterPanel {
         SwingUtilities.invokeLater(() -> {
             JOptionPane.showMessageDialog(mainPanel, message, "Error", JOptionPane.ERROR_MESSAGE);
         });
+    }
+    
+    private void clearEnvironmentVariables() {
+        int result = JOptionPane.showConfirmDialog(
+            mainPanel,
+            "Clear all environment variables? This cannot be undone.",
+            "Clear Variables",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.QUESTION_MESSAGE
+        );
+        
+        if (result == JOptionPane.YES_OPTION) {
+            // Clear the UI
+            selectedEnvironment = null;
+            environmentField.setText("");
+            
+            // Clear variables in the importer
+            importer.clearEnvironmentVariables();
+            
+            // Log the action
+            appendLog("Environment variables cleared successfully.");
+        }
     }
     
     public JPanel getPanel() {

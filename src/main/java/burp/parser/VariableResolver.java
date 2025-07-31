@@ -54,4 +54,8 @@ public class VariableResolver {
     public Map<String, String> getVariables() {
         return new HashMap<>(variables);
     }
+    
+    public void clearAllVariables() {
+        variables.clear();
+    }
 }

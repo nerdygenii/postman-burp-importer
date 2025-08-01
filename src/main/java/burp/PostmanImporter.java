@@ -32,13 +32,14 @@ public class PostmanImporter {
     private final Set<String> existingTabs = ConcurrentHashMap.newKeySet();
     private final boolean debugMode = true; // Set to false to reduce logging
     private ImportResult lastImportResult; // Store last import result for retry functionality
+    private boolean variablesAlreadyResolved = false; // Flag to prevent double dialog
     
     public PostmanImporter(MontoyaApi api) {
         this.api = api;
         this.parser = new PostmanParser();
         this.variableResolver = new VariableResolver();
         this.requestBuilder = new RequestBuilder(api, variableResolver);
-        this.variableDetector = new VariableDetector(variableResolver); // Initialize variable detector
+        this.variableDetector = new VariableDetector(variableResolver, api); // Pass API for logging
         this.ui = new ImporterPanel(this);
     }
     
@@ -150,6 +151,9 @@ public class PostmanImporter {
     
     // New method for generating previews
     public void showPreview(File collectionFile, File environmentFile) {
+        // Reset variable resolution flag for new preview
+        variablesAlreadyResolved = false;
+        
         SwingWorker<List<RequestPreview>, String> worker = new SwingWorker<List<RequestPreview>, String>() {
             @Override
             protected List<RequestPreview> doInBackground() throws Exception {
@@ -171,7 +175,7 @@ public class PostmanImporter {
                 
                 // Analyze variables
                 publish("Analyzing variables...");
-                VariableDetector tempDetector = new VariableDetector(tempResolver);
+                VariableDetector tempDetector = new VariableDetector(tempResolver, api);
                 VariableAnalysis variableAnalysis = tempDetector.analyzeCollection(collection);
                 
                 // Generate previews with variable information
@@ -209,10 +213,25 @@ public class PostmanImporter {
         boolean hasUnresolvedVariables = previews.stream()
             .anyMatch(RequestPreview::hasUnresolvedVariables);
         
+        // PREVIEW WORKFLOW DECISION POINT
+        api.logging().logToOutput("🎯🎯🎯 PREVIEW DECISION POINT: hasUnresolvedVariables=" + hasUnresolvedVariables + " 🎯🎯🎯");
+        
+        if (debugMode) {
+            api.logging().logToOutput("DEBUG checkAndHandleVariables: hasUnresolvedVariables=" + hasUnresolvedVariables);
+            api.logging().logToOutput("DEBUG checkAndHandleVariables: previews count=" + previews.size());
+            for (RequestPreview preview : previews) {
+                api.logging().logToOutput("DEBUG checkAndHandleVariables: preview '" + preview.getName() + 
+                    "' hasUnresolvedVars=" + preview.hasUnresolvedVariables() + 
+                    " unresolvedVars=" + preview.getUnresolvedVariables());
+            }
+        }
+        
         if (hasUnresolvedVariables) {
+            api.logging().logToOutput("🎉🎉🎉 SHOWING PREVIEW VARIABLE DIALOG NOW! 🎉🎉🎉");
             // Show variable resolution dialog regardless of environment file
             showVariableResolutionDialog(previews, collectionFile, environmentFile);
         } else {
+            api.logging().logToOutput("❌❌❌ PREVIEW: NO VARIABLES DETECTED - SHOWING SELECTION DIALOG ❌❌❌");
             // Proceed directly to selection dialog
             showSelectionDialog(previews, collectionFile, environmentFile);
         }
@@ -332,13 +351,20 @@ public class PostmanImporter {
         
         // Resolve URL for preview
         String url = "Unknown URL";
+        String rawUrl = null;
         try {
-            String rawUrl = extractRawUrl(request.url);
+            rawUrl = extractRawUrl(request.url);
             if (rawUrl != null) {
                 url = resolver.resolve(rawUrl);
+                if (debugMode) {
+                    api.logging().logToOutput("DEBUG createRequestPreview: '" + item.name + "' rawUrl='" + rawUrl + "' resolvedUrl='" + url + "'");
+                }
             }
         } catch (Exception e) {
             url = "Error resolving URL: " + e.getMessage();
+            if (debugMode) {
+                api.logging().logToOutput("DEBUG createRequestPreview: '" + item.name + "' URL resolution failed: " + e.getMessage());
+            }
         }
         
         // Check for various features
@@ -353,14 +379,39 @@ public class PostmanImporter {
         Set<String> requestVariables = detector.findVariablesInRequest(request);
         Set<String> unresolvedVariables = new HashSet<>();
         
+        if (debugMode) {
+            api.logging().logToOutput("DEBUG createRequestPreview: '" + item.name + "' requestVariables=" + requestVariables);
+        }
+        
         for (String variable : requestVariables) {
             String testValue = "{{" + variable + "}}";
             String resolved = resolver.resolve(testValue);
             
-            // If it's still the same, it means the variable wasn't resolved
-            if (testValue.equals(resolved)) {
-                unresolvedVariables.add(variable);
+            if (debugMode) {
+                api.logging().logToOutput("DEBUG createRequestPreview: '" + item.name + "' variable='" + variable + "' testValue='" + testValue + "' resolved='" + resolved + "'");
             }
+            
+            // Variable is unresolved if:
+            // 1. Still contains the original variable syntax
+            // 2. Resolves to empty string or whitespace (indicates missing variable)
+            boolean isUnresolved = testValue.equals(resolved) || 
+                                   resolved == null || 
+                                   resolved.trim().isEmpty();
+            
+            if (isUnresolved) {
+                unresolvedVariables.add(variable);
+                if (debugMode) {
+                    api.logging().logToOutput("DEBUG createRequestPreview: '" + item.name + "' variable '" + variable + "' is UNRESOLVED (resolved to empty/null)");
+                }
+            } else {
+                if (debugMode) {
+                    api.logging().logToOutput("DEBUG createRequestPreview: '" + item.name + "' variable '" + variable + "' WAS RESOLVED to: '" + resolved + "'");
+                }
+            }
+        }
+        
+        if (debugMode) {
+            api.logging().logToOutput("DEBUG createRequestPreview: '" + item.name + "' final unresolvedVariables=" + unresolvedVariables);
         }
         
         // Enhanced GraphQL detection and naming
@@ -504,10 +555,24 @@ public class PostmanImporter {
     }
     
     public void importCollection(File collectionFile, File environmentFile, String destination) {
+        // Reset variable resolution flag for new import
+        variablesAlreadyResolved = false;
+        
+        if (debugMode) {
+            api.logging().logToOutput("🚨🚨🚨 NEW VERSION 1.0.4 - FIXED CODE IS RUNNING! 🚨🚨🚨");
+            api.logging().logToOutput("DEBUG PostmanImporter: Starting importCollection with destination=" + destination);
+            api.logging().logToOutput("DEBUG PostmanImporter: collectionFile=" + collectionFile);
+            api.logging().logToOutput("DEBUG PostmanImporter: environmentFile=" + environmentFile);
+        }
+        
         // First check for variables, similar to showPreview
         SwingWorker<List<RequestPreview>, String> worker = new SwingWorker<List<RequestPreview>, String>() {
             @Override
             protected List<RequestPreview> doInBackground() throws Exception {
+                if (debugMode) {
+                    api.logging().logToOutput("DEBUG PostmanImporter: SwingWorker started - analyzing collection");
+                }
+                
                 publish("Analyzing collection...");
                 
                 // Parse collection
@@ -526,7 +591,7 @@ public class PostmanImporter {
                 
                 // Analyze variables
                 publish("Analyzing variables...");
-                VariableDetector tempDetector = new VariableDetector(tempResolver);
+                VariableDetector tempDetector = new VariableDetector(tempResolver, api);
                 VariableAnalysis variableAnalysis = tempDetector.analyzeCollection(collection);
                 
                 // Generate previews with variable information
@@ -566,10 +631,38 @@ public class PostmanImporter {
         boolean hasUnresolvedVariables = previews.stream()
             .anyMatch(RequestPreview::hasUnresolvedVariables);
         
-        if (hasUnresolvedVariables) {
+        // IMPOSSIBLE TO MISS DEBUG MESSAGE
+        api.logging().logToOutput("🔥🔥🔥 DECISION POINT: hasUnresolvedVariables=" + hasUnresolvedVariables + " 🔥🔥🔥");
+        api.logging().logToOutput("🔥🔥🔥 VARIABLES ALREADY RESOLVED: " + variablesAlreadyResolved + " 🔥🔥🔥");
+        
+        if (debugMode) {
+            api.logging().logToOutput("DEBUG checkVariablesAndImport: hasUnresolvedVariables=" + hasUnresolvedVariables);
+            api.logging().logToOutput("DEBUG checkVariablesAndImport: variablesAlreadyResolved=" + variablesAlreadyResolved);
+            api.logging().logToOutput("DEBUG checkVariablesAndImport: previews count=" + previews.size());
+            for (RequestPreview preview : previews) {
+                api.logging().logToOutput("DEBUG checkVariablesAndImport: preview '" + preview.getName() + 
+                    "' hasUnresolvedVars=" + preview.hasUnresolvedVariables() + 
+                    " unresolvedVars=" + preview.getUnresolvedVariables());
+            }
+        }
+        
+        // Only show dialog if variables are unresolved AND haven't been resolved already
+        if (hasUnresolvedVariables && !variablesAlreadyResolved) {
+            api.logging().logToOutput("🚨🚨🚨 SHOWING VARIABLE DIALOG NOW! 🚨🚨🚨");
+            if (debugMode) {
+                api.logging().logToOutput("DEBUG checkVariablesAndImport: *** SHOWING VARIABLE RESOLUTION DIALOG ***");
+            }
             // Show variable resolution dialog regardless of environment file
             showVariableResolutionDialogForImport(previews, collectionFile, environmentFile, destination);
         } else {
+            if (variablesAlreadyResolved) {
+                api.logging().logToOutput("✅✅✅ VARIABLES ALREADY RESOLVED - SKIPPING DIALOG ✅✅✅");
+            } else {
+                api.logging().logToOutput("❌❌❌ NO VARIABLES DETECTED - SKIPPING DIALOG ❌❌❌");
+            }
+            if (debugMode) {
+                api.logging().logToOutput("DEBUG checkVariablesAndImport: *** NO UNRESOLVED VARIABLES - PROCEEDING WITH DIRECT IMPORT ***");
+            }
             // Proceed directly with import using all requests
             proceedWithDirectImport(collectionFile, environmentFile, destination);
         }
@@ -585,7 +678,7 @@ public class PostmanImporter {
             }
             tempResolver.addCollectionVariables(collection);
             
-            VariableDetector tempDetector = new VariableDetector(tempResolver);
+            VariableDetector tempDetector = new VariableDetector(tempResolver, api);
             VariableAnalysis variableAnalysis = tempDetector.analyzeCollection(collection);
             
             if (!variableAnalysis.getUnresolvedVariables().isEmpty()) {
@@ -607,26 +700,33 @@ public class PostmanImporter {
                             return;
                             
                         case MANUAL_ENTRY:
-                            ManualVariableEntryDialog entryDialog = new ManualVariableEntryDialog(
-                                (JFrame) SwingUtilities.getWindowAncestor(ui.getPanel()),
-                                variableAnalysis.getUnresolvedVariables(),
-                                tempDetector
-                            );
+                            // Variables were already entered in the VariableResolutionDialog
+                            // No need to show the dialog again - just use the collected variables
+                            Map<String, String> manualVariables = dialog.getManualVariables();
                             
-                            if (entryDialog.showDialog()) {
+                            if (manualVariables != null && !manualVariables.isEmpty()) {
                                 // Add manually entered variables to resolver
-                                Map<String, String> enteredValues = entryDialog.getVariables();
-                                for (Map.Entry<String, String> entry : enteredValues.entrySet()) {
+                                for (Map.Entry<String, String> entry : manualVariables.entrySet()) {
                                     variableResolver.addCustomVariable(entry.getKey(), entry.getValue());
+                                    api.logging().logToOutput("🔧🔧🔧 ADDED VARIABLE: " + entry.getKey() + " = " + entry.getValue() + " 🔧🔧🔧");
                                 }
+                                
+                                // Mark variables as resolved to prevent double dialog
+                                variablesAlreadyResolved = true;
+                                api.logging().logToOutput("🔧🔧🔧 VARIABLES MANUALLY RESOLVED - FLAG SET 🔧🔧🔧");
+                                
                                 proceedWithDirectImport(collectionFile, environmentFile, destination);
                             } else {
-                                ui.appendLog("Import cancelled by user.");
+                                ui.appendLog("No variables were entered. Import cancelled.");
                                 ui.setImportComplete();
                             }
                             return;
                             
                         case IGNORE_CONTINUE:
+                            // Mark variables as resolved to prevent double dialog
+                            variablesAlreadyResolved = true;
+                            api.logging().logToOutput("🔧🔧🔧 VARIABLES IGNORED - FLAG SET 🔧🔧🔧");
+                            
                             ui.appendLog("Proceeding with import, ignoring unresolved variables...");
                             proceedWithDirectImport(collectionFile, environmentFile, destination);
                             return;

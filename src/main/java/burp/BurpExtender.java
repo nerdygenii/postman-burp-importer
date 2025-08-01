@@ -41,7 +41,7 @@ public class BurpExtender implements BurpExtension {
         
         // Print extension info and author details
         api.logging().logToOutput("=================================================");
-        api.logging().logToOutput("Postman Collection Importer v1.0.1");
+        api.logging().logToOutput("Postman Collection Importer v1.0.4");
         api.logging().logToOutput("Author: Abdulrahman Oyekunle");
         api.logging().logToOutput("GitHub: https://github.com/nerdygenii/postman-burp-importer");
         api.logging().logToOutput("=================================================");

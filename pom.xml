@@ -7,7 +7,7 @@
 
     <groupId>com.github.nerdygenii</groupId>
     <artifactId>postman-burp-importer</artifactId>
-    <version>1.0.3</version>
+    <version>1.0.4</version>
     <packaging>jar</packaging>
     
     <name>Postman Collection Importer for Burp Suite</name>

@@ -13,7 +13,7 @@ import java.io.UnsupportedEncodingException;
 public class RequestBuilder {
     private final MontoyaApi api;
     private final VariableResolver resolver;
-    private final boolean debugMode = false; // Set to true to enable debug logging
+    private final boolean debugMode = true; // Set to true to enable debug logging for GraphQL debugging
     
     public RequestBuilder(MontoyaApi api, VariableResolver resolver) {
         this.api = api;
@@ -46,18 +46,18 @@ public class RequestBuilder {
                     String value = resolver.resolve(header.value);
                     
                     if (debugMode) {
-                        System.out.println("DEBUG: Processing custom header: " + key + ": " + value);
+                        api.logging().logToOutput("DEBUG: Processing custom header: " + key + ": " + value);
                     }
                     
                     // Skip Host header - we build it automatically from the URL
                     if (!"Host".equalsIgnoreCase(key)) {
                         headers.add(key + ": " + value);
                         if (debugMode) {
-                            System.out.println("DEBUG: Added custom header: " + key + ": " + value);
+                            api.logging().logToOutput("DEBUG: Added custom header: " + key + ": " + value);
                         }
                     } else {
                         if (debugMode) {
-                            System.out.println("DEBUG: Skipped Host header: " + key + ": " + value);
+                            api.logging().logToOutput("DEBUG: Skipped Host header: " + key + ": " + value);
                         }
                     }
                 }
@@ -178,34 +178,68 @@ public class RequestBuilder {
     private String buildHost(Object urlData, String resolvedUrl) {
         if (urlData == null) return "localhost";
         
-        // If we have a resolved URL, use it directly for host extraction
-        if (resolvedUrl != null) {
+        // Temporarily disable noisy debug messages to avoid buffer overflow
+        // if (debugMode) {
+        //     api.logging().logToOutput("DEBUG buildHost: urlData=" + urlData);
+        //     api.logging().logToOutput("DEBUG buildHost: resolvedUrl=" + resolvedUrl);
+        // }
+        
+        // Check if resolved URL still contains unresolved variables OR is empty
+        boolean hasUnresolvedVariables = (resolvedUrl != null && resolvedUrl.matches(".*\\{\\{[^}]+\\}\\}.*")) || 
+                                        (resolvedUrl != null && resolvedUrl.trim().isEmpty());
+        
+        // Temporarily disable noisy debug messages
+        // if (debugMode) {
+        //     api.logging().logToOutput("DEBUG buildHost: hasUnresolvedVariables=" + hasUnresolvedVariables);
+        // }
+        
+        // If we have a fully resolved URL (no variables and not empty), use it for host extraction
+        if (resolvedUrl != null && !hasUnresolvedVariables && !resolvedUrl.trim().isEmpty()) {
             HttpUtils.HostInfo hostInfo = HttpUtils.parseUrl(resolvedUrl);
             return buildHostWithPort(hostInfo.host, hostInfo.port, hostInfo.useHttps);
         }
         
-        // Handle string URL format (fallback)
+        // Handle Url object format FIRST (for GraphQL cases)
+        PostmanCollection.Url url = parseUrlObject(urlData);
+        if (url != null) {
+            // Temporarily disable noisy debug messages
+            // if (debugMode) {
+            //     api.logging().logToOutput("DEBUG buildHost: Parsed URL object host=" + url.host);
+            //     api.logging().logToOutput("DEBUG buildHost: Parsed URL object raw=" + url.raw);
+            // }
+            
+            if (url.host != null && !url.host.isEmpty()) {
+                // For GraphQL endpoints like ["{{GRAPHQL_ENDPOINT}}"], preserve variable format
+                String host = String.join(".", url.host);
+                if (url.port != null && !url.port.isEmpty()) {
+                    host += ":" + url.port;
+                }
+                if (debugMode) {
+                    api.logging().logToOutput("DEBUG buildHost: Final host from object=" + host);
+                }
+                // Don't resolve variables here - preserve them as-is for unresolved variables
+                return host;
+            } else if (url.raw != null) {
+                String originalUrl = url.raw; // Use original unresolved URL
+                HttpUtils.HostInfo hostInfo = HttpUtils.parseUrl(originalUrl);
+                if (debugMode) {
+                    api.logging().logToOutput("DEBUG buildHost: Raw URL hostInfo.host=" + hostInfo.host);
+                }
+                return buildHostWithPort(hostInfo.host, hostInfo.port, hostInfo.useHttps);
+            }
+        }
+        
+        // Handle string URL format with variables (fallback)
         if (urlData instanceof String) {
             String urlString = (String) urlData; // Use original unresolved URL
             HttpUtils.HostInfo hostInfo = HttpUtils.parseUrl(urlString);
+            // Temporarily disable noisy debug message
+            // if (debugMode) {
+            //     api.logging().logToOutput("DEBUG buildHost: String URL hostInfo.host=" + hostInfo.host);
+            // }
             return buildHostWithPort(hostInfo.host, hostInfo.port, hostInfo.useHttps);
         }
         
-        // Handle Url object format
-        PostmanCollection.Url url = parseUrlObject(urlData);
-        if (url == null) return "localhost";
-        
-        if (url.host != null && !url.host.isEmpty()) {
-            String host = String.join(".", url.host);
-            if (url.port != null && !url.port.isEmpty()) {
-                host += ":" + url.port;
-            }
-            return host; // Don't resolve variables here - preserve them as-is
-        } else if (url.raw != null) {
-            String originalUrl = url.raw; // Use original unresolved URL
-            HttpUtils.HostInfo hostInfo = HttpUtils.parseUrl(originalUrl);
-            return buildHostWithPort(hostInfo.host, hostInfo.port, hostInfo.useHttps);
-        }
         return "localhost";
     }
     
@@ -347,8 +381,17 @@ public class RequestBuilder {
     private byte[] buildGraphQLBody(PostmanCollection.GraphQL graphql, List<String> headers) {
         if (graphql == null) return new byte[0];
         
+        // Keep minimal GraphQL logging to avoid buffer overflow
+        if (debugMode) {
+            api.logging().logToOutput("DEBUG GraphQL: Building GraphQL body");
+            // api.logging().logToOutput("DEBUG GraphQL: Query=" + graphql.query);
+            // api.logging().logToOutput("DEBUG GraphQL: Variables raw=" + graphql.variables);
+        }
+        
         try {
-            Gson gson = new Gson();
+            Gson gson = new GsonBuilder()
+                .serializeNulls()  // Preserve null values in JSON
+                .create();
             JsonObject body = new JsonObject();
             
             // Add query (resolve variables in the query string)
@@ -356,29 +399,61 @@ public class RequestBuilder {
             if (graphql.query != null) {
                 String resolvedQuery = resolver.resolve(graphql.query);
                 body.addProperty("query", resolvedQuery);
+                // Reduce verbose logging
+                // if (debugMode) {
+                //     api.logging().logToOutput("DEBUG GraphQL: Resolved query=" + resolvedQuery);
+                // }
             }
             
-            // Add variables (resolve Postman variables in the variables JSON)
+            // Add variables (preserve the actual GraphQL variables structure)
             if (graphql.variables != null && !graphql.variables.trim().isEmpty()) {
                 try {
-                    // First resolve any Postman variables in the variables string
-                    String resolvedVariables = resolver.resolve(graphql.variables);
+                    // Clean up the variables string (remove extra whitespace and newlines)
+                    String variablesString = graphql.variables.trim();
+                    if (debugMode) {
+                        api.logging().logToOutput("DEBUG GraphQL: Cleaned variables string=" + variablesString);
+                    }
                     
-                    // Then parse as JSON
-                    JsonElement variablesElement = gson.fromJson(resolvedVariables, JsonElement.class);
-                    body.add("variables", variablesElement);
-                } catch (Exception e) {
-                    // If variables parsing fails, try to resolve individual variables
-                    try {
-                        // Extract variables from the string and create a proper JSON object
-                        String cleanVariables = resolver.resolve(graphql.variables);
-                        if (cleanVariables.trim().startsWith("{") && cleanVariables.trim().endsWith("}")) {
-                            JsonElement parsedVariables = gson.fromJson(cleanVariables, JsonElement.class);
-                            body.add("variables", parsedVariables);
-                        } else {
-                            body.add("variables", new JsonObject());
+                    // Parse the JSON to get the actual structure first
+                    JsonElement variablesElement = gson.fromJson(variablesString, JsonElement.class);
+                    if (debugMode) {
+                        api.logging().logToOutput("DEBUG GraphQL: Parsed variables element=" + variablesElement);
+                    }
+                    
+                    // Only resolve Postman variables, not GraphQL nulls
+                    // Check if the original string contains Postman variables
+                    if (variablesString.contains("{{") && variablesString.contains("}}")) {
+                        // Convert back to string, then resolve Postman variables, then parse again
+                        String variablesJson = gson.toJson(variablesElement);
+                        String resolvedVariablesJson = resolver.resolve(variablesJson);
+                        JsonElement finalVariables = gson.fromJson(resolvedVariablesJson, JsonElement.class);
+                        body.add("variables", finalVariables);
+                        
+                        if (debugMode) {
+                            api.logging().logToOutput("DEBUG GraphQL: Variables had Postman vars, resolved to=" + finalVariables);
                         }
+                    } else {
+                        // No Postman variables, use original parsed structure
+                        body.add("variables", variablesElement);
+                        
+                        if (debugMode) {
+                            api.logging().logToOutput("DEBUG GraphQL: No Postman vars, using original=" + variablesElement);
+                        }
+                    }
+                } catch (Exception e) {
+                    if (debugMode) {
+                        api.logging().logToOutput("DEBUG GraphQL: Variables parsing failed, trying fallback: " + e.getMessage());
+                    }
+                    // If first approach fails, try simpler direct parsing
+                    try {
+                        String cleanVariables = graphql.variables.replaceAll("\\s+", " ").trim();
+                        String resolvedVariables = resolver.resolve(cleanVariables);
+                        JsonElement variablesElement = gson.fromJson(resolvedVariables, JsonElement.class);
+                        body.add("variables", variablesElement);
                     } catch (Exception ex) {
+                        if (debugMode) {
+                            api.logging().logToOutput("DEBUG GraphQL: All variables parsing failed, using empty object: " + ex.getMessage());
+                        }
                         // Final fallback to empty object
                         body.add("variables", new JsonObject());
                     }
@@ -392,9 +467,17 @@ public class RequestBuilder {
                 headers.add("Content-Type: application/json");
             }
             
-            return gson.toJson(body).getBytes(StandardCharsets.UTF_8);
+            String finalBody = gson.toJson(body);
+            if (debugMode) {
+                api.logging().logToOutput("DEBUG GraphQL: Final JSON body=" + finalBody);
+            }
+            
+            return finalBody.getBytes(StandardCharsets.UTF_8);
             
         } catch (Exception e) {
+            if (debugMode) {
+                api.logging().logToOutput("DEBUG GraphQL: Complete failure in buildGraphQLBody: " + e.getMessage());
+            }
             // Fallback to empty body if GraphQL processing fails
             return new byte[0];
         }

@@ -2,6 +2,7 @@ package burp.utils;
 
 import burp.models.*;
 import burp.parser.VariableResolver;
+import burp.api.montoya.MontoyaApi;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
@@ -9,9 +10,16 @@ import java.util.regex.Matcher;
 public class VariableDetector {
     private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{\\{([^}]+)\\}\\}");
     private final VariableResolver resolver;
+    private final MontoyaApi api;
     
     public VariableDetector(VariableResolver resolver) {
         this.resolver = resolver;
+        this.api = null; // For backward compatibility
+    }
+    
+    public VariableDetector(VariableResolver resolver, MontoyaApi api) {
+        this.resolver = resolver;
+        this.api = api;
     }
     
     public VariableAnalysis analyzeCollection(PostmanCollection collection) {
@@ -19,11 +27,20 @@ public class VariableDetector {
         int totalRequests = 0;
         int requestsWithVariables = 0;
         
+        if (api != null) {
+            api.logging().logToOutput("🔍🔍🔍 NEW VARIABLE DETECTOR v1.0.4 IS RUNNING! 🔍🔍🔍");
+            api.logging().logToOutput("DEBUG VariableDetector: Starting collection analysis");
+        }
+        
         List<RequestItem> requests = flattenRequests(collection.item, "");
         
         for (RequestItem item : requests) {
             totalRequests++;
             Set<String> requestVariables = findVariablesInRequest(item.request);
+            
+            if (api != null) {
+                api.logging().logToOutput("DEBUG VariableDetector: Request '" + item.name + "' found variables=" + requestVariables);
+            }
             
             if (!requestVariables.isEmpty()) {
                 requestsWithVariables++;
@@ -33,12 +50,36 @@ public class VariableDetector {
                     String testValue = "{{" + variable + "}}";
                     String resolved = resolver.resolve(testValue);
                     
-                    // If it's still the same, it means the variable wasn't resolved
-                    if (testValue.equals(resolved)) {
+                    if (api != null) {
+                        api.logging().logToOutput("DEBUG VariableDetector: Variable '" + variable + "' testValue='" + testValue + "' resolved='" + resolved + "'");
+                    }
+                    
+                    // Variable is unresolved if:
+                    // 1. Still contains the original variable syntax
+                    // 2. Resolves to empty string or whitespace (indicates missing variable)
+                    boolean isUnresolved = testValue.equals(resolved) || 
+                                           resolved == null || 
+                                           resolved.trim().isEmpty();
+                    
+                    if (isUnresolved) {
                         unresolvedVariables.add(variable);
+                        if (api != null) {
+                            api.logging().logToOutput("DEBUG VariableDetector: Variable '" + variable + "' is UNRESOLVED (resolved to: '" + resolved + "')");
+                        }
+                    } else {
+                        if (api != null) {
+                            api.logging().logToOutput("DEBUG VariableDetector: Variable '" + variable + "' WAS RESOLVED to: '" + resolved + "'");
+                        }
                     }
                 }
             }
+        }
+        
+        if (api != null) {
+            api.logging().logToOutput("DEBUG VariableDetector: Analysis complete - " + 
+                "totalRequests=" + totalRequests + 
+                ", requestsWithVariables=" + requestsWithVariables + 
+                ", unresolvedVariables=" + unresolvedVariables);
         }
         
         return new VariableAnalysis(unresolvedVariables, totalRequests, requestsWithVariables);
@@ -50,7 +91,15 @@ public class VariableDetector {
         // Check URL
         String rawUrl = extractRawUrl(request.url);
         if (rawUrl != null) {
-            variables.addAll(extractVariables(rawUrl));
+            Set<String> urlVars = extractVariables(rawUrl);
+            variables.addAll(urlVars);
+            if (api != null) {
+                api.logging().logToOutput("DEBUG VariableDetector: URL variables=" + urlVars + " from rawUrl=" + rawUrl);
+            }
+        } else {
+            if (api != null) {
+                api.logging().logToOutput("DEBUG VariableDetector: Could not extract raw URL from=" + request.url);
+            }
         }
         
         // Check headers
@@ -68,12 +117,20 @@ public class VariableDetector {
         // Check body
         if (request.body != null) {
             if (request.body.raw != null) {
-                variables.addAll(extractVariables(request.body.raw));
+                Set<String> bodyVars = extractVariables(request.body.raw);
+                variables.addAll(bodyVars);
+                if (api != null && !bodyVars.isEmpty()) {
+                    api.logging().logToOutput("DEBUG VariableDetector: Raw body variables=" + bodyVars);
+                }
             }
             
             // Check GraphQL body mode
             if ("graphql".equals(request.body.mode) && request.body.graphql != null) {
-                variables.addAll(findVariablesInGraphQL(request.body.graphql));
+                Set<String> graphqlVars = findVariablesInGraphQL(request.body.graphql);
+                variables.addAll(graphqlVars);
+                if (api != null) {
+                    api.logging().logToOutput("DEBUG VariableDetector: GraphQL body detected - found variables=" + graphqlVars);
+                }
             }
         }
         
@@ -82,6 +139,9 @@ public class VariableDetector {
             variables.addAll(findVariablesInAuth(request.auth));
         }
         
+        if (api != null) {
+            api.logging().logToOutput("DEBUG VariableDetector: Total variables found in request=" + variables);
+        }
         return variables;
     }
     
@@ -90,14 +150,25 @@ public class VariableDetector {
         
         // Check GraphQL query for variables
         if (graphql.query != null) {
-            variables.addAll(extractVariables(graphql.query));
+            Set<String> queryVars = extractVariables(graphql.query);
+            variables.addAll(queryVars);
+            if (api != null) {
+                api.logging().logToOutput("DEBUG VariableDetector: GraphQL query variables=" + queryVars);
+            }
         }
         
         // Check GraphQL variables JSON for Postman variables
         if (graphql.variables != null) {
-            variables.addAll(extractVariables(graphql.variables));
+            Set<String> variableVars = extractVariables(graphql.variables);
+            variables.addAll(variableVars);
+            if (api != null) {
+                api.logging().logToOutput("DEBUG VariableDetector: GraphQL variables field variables=" + variableVars);
+            }
         }
         
+        if (api != null) {
+            api.logging().logToOutput("DEBUG VariableDetector: Total GraphQL variables found=" + variables);
+        }
         return variables;
     }
     
@@ -149,26 +220,29 @@ public class VariableDetector {
     private String extractRawUrl(Object urlData) {
         if (urlData == null) return null;
         
+        // Handle string URL format
         if (urlData instanceof String) {
             return (String) urlData;
         }
         
-        // Handle URL object format - simplified version
+        // Handle Url object format - use proper JSON parsing like PostmanImporter
         try {
-            if (urlData.toString().contains("raw")) {
-                // Extract raw URL from object representation
-                String objStr = urlData.toString();
-                int rawIndex = objStr.indexOf("raw=");
-                if (rawIndex != -1) {
-                    int start = rawIndex + 4;
-                    int end = objStr.indexOf(",", start);
-                    if (end == -1) end = objStr.indexOf("}", start);
-                    if (end != -1) {
-                        return objStr.substring(start, end).trim();
+            com.google.gson.Gson gson = new com.google.gson.Gson();
+            com.google.gson.JsonElement element = gson.toJsonTree(urlData);
+            if (element.isJsonObject()) {
+                com.google.gson.JsonObject urlObject = element.getAsJsonObject();
+                if (urlObject.has("raw")) {
+                    String rawUrl = urlObject.get("raw").getAsString();
+                    if (api != null) {
+                        api.logging().logToOutput("DEBUG VariableDetector: Successfully extracted raw URL=" + rawUrl);
                     }
+                    return rawUrl;
                 }
             }
         } catch (Exception e) {
+            if (api != null) {
+                api.logging().logToOutput("DEBUG VariableDetector: Failed to parse URL object, error=" + e.getMessage());
+            }
             // Fallback to string representation
         }
         
